@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { debounce } from 'perfect-debounce'
 import { sendParentEvent } from '~/logic/messaging'
-import { generateQRCode } from '~/logic/generate'
+import { generateQRCode, generateQRCodeSVG } from '~/logic/generate'
 import { dataUrlGeneratedQRCode, defaultGeneratorState, generateQRCodeInfo, hasParentWindow, isLargeScreen, qrcode } from '~/logic/state'
 import { view } from '~/logic/view'
 import type { State } from '~/logic/types'
@@ -33,6 +33,14 @@ function download() {
   const a = document.createElement('a')
   a.href = dataUrlGeneratedQRCode.value!
   a.download = `${state.value.text.replace(/\W/g, '_')}[${state.value.ecc}_x${state.value.scale}].png`
+  a.click()
+}
+
+function downloadSVG() {
+  const svg = generateQRCodeSVG(state.value)
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
+  a.download = `${state.value.text.replace(/\W/g, '_')}[${state.value.ecc}_x${state.value.scale}].svg`
   a.click()
 }
 
@@ -110,6 +118,14 @@ const mayNotScannable = computed(() => {
     return true
   if (state.value.transformScale > 1.05)
     return true
+})
+
+const svgNotFullySupported = computed(() => {
+  return state.value.effect !== 'none'
+    || state.value.transformPerspectiveX !== 0
+    || state.value.transformPerspectiveY !== 0
+    || state.value.transformScale !== 1
+    || !!state.value.backgroundImage
 })
 
 const hasNonCenteredMargin = computed(() => {
@@ -347,13 +363,17 @@ watch(
 
         <div border="t base" my1 />
 
-        <OptionItem title="Colors" div @reset="() => { state.lightColor = '#ffffff'; state.darkColor = '#000000' }">
+        <OptionItem title="Colors" div @reset="() => { state.lightColor = '#ffffff'; state.darkColor = '#000000'; state.transparent = false }">
           <div flex="~ gap-2">
             <OptionColor v-model="state.lightColor" />
             <OptionColor v-model="state.darkColor" />
             <label flex="~ gap-2 items-center" ml2>
               <OptionCheckbox v-model="state.invert" />
               <span text-sm op75>Invert</span>
+            </label>
+            <label flex="~ gap-2 items-center" ml2>
+              <OptionCheckbox v-model="state.transparent" />
+              <span text-sm op75>Transparent</span>
             </label>
           </div>
         </OptionItem>
@@ -461,7 +481,7 @@ watch(
           width: `${rightPanelRect.width}px`,
         } : {}"
       >
-        <canvas ref="canvas" w-full width="1000" height="1000" border="~ base rounded" />
+        <canvas ref="canvas" w-full width="1000" height="1000" border="~ base rounded" :class="state.transparent ? 'bg-transparency-grid' : ''" />
 
         <div v-if="qrcode" border="~ base rounded" p3 pl6 pr0 flex="~ col gap-2">
           <div grid="~ gap-1 cols-6 items-center">
@@ -504,7 +524,14 @@ watch(
           @click="download()"
         >
           <div i-ri-download-line />
-          Download
+          Download PNG
+        </button>
+        <button
+          py2 text-sm text-button
+          @click="downloadSVG()"
+        >
+          <div i-ri-download-line />
+          Download SVG
         </button>
         <button
           py2 text-sm text-button
@@ -533,6 +560,9 @@ watch(
         <div v-if="state.renderPointsType !== 'all'" border="~ indigo/60 rounded" bg-indigo-5:10 px3 py2 text-sm text-indigo>
           This is a partial QR Code. It does <b>not</b> contain all the necessary data to be scannable.
         </div>
+        <div v-if="svgNotFullySupported" border="~ yellow-6/60 rounded" bg-yellow-5:10 px3 py2 text-sm text-yellow-6>
+          <b>SVG export</b> does not support effects, transforms, or background images. They will be ignored in the exported SVG.
+        </div>
       </div>
 
       <div my8 h-1px border="t base" w-10 lg:hidden />
@@ -560,3 +590,9 @@ watch(
     @update:model-value="uploadQR = undefined"
   />
 </template>
+
+<style scoped>
+.bg-transparency-grid {
+  background: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAABGdBTUEAALGPC/xhBQAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAIKADAAQAAAABAAAAIAAAAACPTkDJAAAAZUlEQVRIDe2VMQoAMAgDa9/g/1/oIzrpZBCh2dLFkkoDF0Fz99OdiOjks+2/7S8fRRmMMIVoRGSoYzvvqF8ZIMKlC1GhQBc6IkPzq32QmdAzkEGihpWOSPsAss8HegYySNSw0hE9WQ4StafZFqkAAAAASUVORK5CYII=) 0% 0% / 30px;
+}
+</style>

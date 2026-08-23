@@ -29,6 +29,7 @@ export function defaultGeneratorState(): QRCodeGeneratorState {
     scale: 20,
     lightColor: '#ffffff',
     darkColor: '#000000',
+    transparent: false,
     pixelStyle: 'rounded',
     markerStyle: 'auto',
     markerShape: 'square',

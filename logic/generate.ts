@@ -1,11 +1,13 @@
 import seedrandom from 'seedrandom'
 
+import type { QrCodeGenerateResult } from 'uqr'
 import { QrCodeDataType, encode } from 'uqr'
 import Perspective from '../vendor/perspective'
 import type { QRCodeGeneratorState, QrCodeGeneratorMarkerState } from './types'
 import { generateQRCodeInfo, qrcode } from './state'
 import { effects } from './effects'
 import { resolveMargin } from './utils'
+import { SvgContext } from './svg'
 
 interface MarkerInfo {
   x: number
@@ -26,12 +28,218 @@ interface PixelInfo {
   marker?: MarkerInfo
 }
 
+interface Draw2DContext {
+  fillStyle: string | CanvasGradient | CanvasPattern
+  strokeStyle: string | CanvasGradient | CanvasPattern
+  fillRect(x: number, y: number, w: number, h: number): void
+  beginPath(): void
+  moveTo(x: number, y: number): void
+  lineTo(x: number, y: number): void
+  closePath(): void
+  arc(x: number, y: number, radius: number, startAngle: number, endAngle: number): void
+  arcTo(x1: number, y1: number, x2: number, y2: number, radius: number): void
+  fill(rule?: CanvasFillRule): void
+}
+
+function getQRCodeDimensions(qr: QrCodeGenerateResult, state: QRCodeGeneratorState) {
+  const {
+    top: marginTop,
+    right: marginRight,
+    bottom: marginBottom,
+    left: marginLeft,
+  } = resolveMargin(state.margin)
+
+  return {
+    width: (qr.size + marginLeft + marginRight) * state.scale,
+    height: (qr.size + marginTop + marginBottom) * state.scale,
+  }
+}
+
+export function generateQRCodeSVG(state: QRCodeGeneratorState): string {
+  const qr = createQrInstance(state)
+  const { width, height } = getQRCodeDimensions(qr, state)
+  const ctx = new SvgContext()
+  drawQRCode(ctx, state, qr)
+  return ctx.toSVG(
+    width,
+    height,
+    state.transparent
+      ? undefined
+      : (state.invert ? state.darkColor : state.lightColor),
+  )
+}
+
 export async function generateQRCode(outCanvas: HTMLCanvasElement, state: QRCodeGeneratorState) {
   if (!outCanvas)
     return
 
   const qr = createQrInstance(state)
+  const { invert } = state
+  const { width, height } = getQRCodeDimensions(qr, state)
 
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  canvas.style.imageRendering = 'pixelated'
+  canvas.style.imageRendering = 'crisp-edges'
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!
+  ctx.clearRect(0, 0, width, height)
+  ctx.imageSmoothingEnabled = false
+
+  generateQRCodeInfo.value = {
+    width,
+    height,
+  }
+
+  drawQRCode(ctx, state, qr)
+
+  await applyPerspective()
+
+  if (state.effectTiming === 'after')
+    await applyBackground()
+
+  if (state.effect === 'crystalize') {
+    const data = ctx.getImageData(0, 0, width, height)
+    const newData = effects.crystalize(data, state.effectCrystalizeRadius, state.seed)
+    ctx.putImageData(newData, 0, 0)
+  }
+  else if (state.effect === 'liquidify') {
+    const data = ctx.getImageData(0, 0, width, height)
+    const newData1 = state.effectLiquidifyDistortRadius
+      ? effects.crystalize(data, state.effectLiquidifyDistortRadius, state.seed)
+      : data
+    const newData2 = effects.liquidify(
+      newData1,
+      state.effectLiquidifyRadius,
+      state.effectLiquidifyThreshold,
+      state.lightColor,
+      state.darkColor,
+    )
+    ctx.putImageData(newData2, 0, 0)
+  }
+
+  if (state.effectTiming === 'before')
+    await applyBackground()
+
+  // final, copy offscreen canvas to the real one
+  outCanvas.width = width
+  outCanvas.height = height
+  const realCtx = outCanvas.getContext('2d')!
+  realCtx.clearRect(0, 0, width, height)
+  realCtx.save()
+  if (!state.transparent) {
+    realCtx.fillStyle = invert ? state.darkColor : state.lightColor
+    realCtx.fillRect(0, 0, width, height)
+  }
+  realCtx.setTransform(
+    state.transformScale,
+    0,
+    0,
+    state.transformScale,
+    -(state.transformScale - 1) * width / 2,
+    -(state.transformScale - 1) * height / 2,
+  )
+  realCtx.drawImage(canvas, 0, 0, width, height)
+  realCtx.restore()
+
+  async function applyPerspective() {
+    if (state.transformPerspectiveX === 0 && state.transformPerspectiveY === 0)
+      return
+
+    const data = ctx.getImageData(0, 0, width, height)
+    ctx.clearRect(0, 0, width, height)
+    const perspective = new Perspective(ctx as any, data)
+
+    const perspectiveX = state.transformPerspectiveX
+    const perspectiveY = state.transformPerspectiveY
+
+    const pos = {
+      topLeftX: 0,
+      topLeftY: 0,
+      bottomLeftX: 0,
+      bottomLeftY: height,
+      topRightX: width,
+      topRightY: 0,
+      bottomRightX: width,
+      bottomRightY: height,
+    }
+
+    if (perspectiveX !== 0) {
+      const offsetX = Math.abs(width * perspectiveX / 2)
+      const offsetY = Math.abs(height * perspectiveX / 3)
+
+      // perspectiveX
+      pos.topLeftX += offsetX
+      pos.topRightX -= offsetX
+      pos.bottomLeftX += offsetX
+      pos.bottomRightX -= offsetX
+      if (perspectiveX > 0) {
+        pos.topRightY += offsetY
+        pos.bottomRightY -= offsetY
+      }
+      else {
+        pos.topLeftY += offsetY
+        pos.bottomLeftY -= offsetY
+      }
+    }
+
+    // perspectiveY
+    if (perspectiveY !== 0) {
+      const offsetX = Math.abs(width * perspectiveY / 3)
+      const offsetY = Math.abs(height * perspectiveY / 2)
+
+      pos.topLeftY += offsetY
+      pos.topRightY += offsetY
+      pos.bottomLeftY -= offsetY
+      pos.bottomRightY -= offsetY
+      if (perspectiveY > 0) {
+        pos.bottomLeftX += offsetX
+        pos.bottomRightX -= offsetX
+      }
+      else {
+        pos.topLeftX += offsetX
+        pos.topRightX -= offsetX
+      }
+    }
+
+    perspective.draw(pos)
+  }
+
+  async function applyBackground() {
+    ctx.restore()
+    const clone = document.createElement('canvas')
+    clone.width = width
+    clone.height = height
+    clone.getContext('2d')!.putImageData(ctx.getImageData(0, 0, width, height), 0, 0)
+
+    if (!state.transparent) {
+      ctx.fillStyle = invert ? state.darkColor : state.lightColor
+      ctx.fillRect(0, 0, width, height)
+    }
+    if (state.backgroundImage) {
+      if (state.backgroundImage.startsWith('#')) {
+        ctx.fillStyle = state.backgroundImage
+        ctx.fillRect(0, 0, width, height)
+      }
+      else {
+        const img = new Image()
+        img.src = state.backgroundImage
+        await new Promise(resolve => img.onload = resolve).then()
+        // draw the image full cover the canvas with aspect ratio
+        const imgRatio = img.width / img.height
+        const canvasRatio = width / height
+        if (imgRatio < canvasRatio)
+          ctx.drawImage(img, 0, (height - width / imgRatio) / 2, width, width / imgRatio)
+        else
+          ctx.drawImage(img, (width - height * imgRatio) / 2, 0, height * imgRatio, height)
+      }
+    }
+
+    ctx.drawImage(clone, 0, 0)
+  }
+}
+
+function drawQRCode(ctx: Draw2DContext, state: QRCodeGeneratorState, qr: QrCodeGenerateResult) {
   const {
     scale: cell,
     rotate,
@@ -54,22 +262,6 @@ export async function generateQRCode(outCanvas: HTMLCanvasElement, state: QRCode
   } = resolveMargin(margin)
 
   const halfcell = cell / 2
-  const width: number = (qr.size + marginLeft + marginRight) * cell
-  const height: number = (qr.size + marginTop + marginBottom) * cell
-
-  const canvas = document.createElement('canvas')
-  canvas.width = width
-  canvas.height = height
-  canvas.style.imageRendering = 'pixelated'
-  canvas.style.imageRendering = 'crisp-edges'
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })!
-  ctx.clearRect(0, 0, width, height)
-  ctx.imageSmoothingEnabled = false
-
-  generateQRCodeInfo.value = {
-    width,
-    height,
-  }
 
   function rand(x: number, y: number, type: string) {
     return seedrandom([seed, type, x, y].join('|'))()
@@ -377,7 +569,9 @@ export async function generateQRCode(outCanvas: HTMLCanvasElement, state: QRCode
       ? state.darkColor
       : darkHex + Math.round(opacity * 255).toString(16).padStart(2, '0')
 
-    const lightColor = invert ? _darkColor : state.lightColor
+    const lightColor = state.transparent
+      ? 'transparent'
+      : invert ? _darkColor : state.lightColor
     const darkColor = invert ? state.lightColor : _darkColor
     ctx.fillStyle = darkColor
 
@@ -404,17 +598,14 @@ export async function generateQRCode(outCanvas: HTMLCanvasElement, state: QRCode
           ctx.fillStyle = lightColor
           ctx.fillRect(cX - cell * 3.5, cY - cell * 3.5, cell * 7, cell * 7)
 
+          // Draw the ring as a single even-odd path so that no light color
+          // is needed to erase the center (allows transparent background)
           ctx.beginPath()
           ctx.fillStyle = darkColor
           ctx.arc(cX, cY, cell * 3.5, 0, Math.PI * 2)
-          ctx.fill()
-
-          ctx.beginPath()
-          ctx.fillStyle = lightColor
+          ctx.moveTo(cX + cell * 2.5, cY)
           ctx.arc(cX, cY, cell * 2.5, 0, Math.PI * 2)
-          ctx.fill()
-
-          ctx.fillStyle = darkColor
+          ctx.fill('evenodd')
         }
       }
       else if (markerShape === 'octagon') {
@@ -438,8 +629,7 @@ export async function generateQRCode(outCanvas: HTMLCanvasElement, state: QRCode
             ] as const
           }
 
-          function drawOctagon(size: number) {
-            ctx.beginPath()
+          function traceOctagon(size: number) {
             const points = octagonFor(1.5 / 3.5 * size, size)
 
             if (_pixelStyle === 'rounded') {
@@ -483,16 +673,15 @@ export async function generateQRCode(outCanvas: HTMLCanvasElement, state: QRCode
               })
             }
             ctx.closePath()
-            ctx.fill()
           }
 
+          // Draw the ring as a single even-odd path so that no light color
+          // is needed to erase the center (allows transparent background)
+          ctx.beginPath()
           ctx.fillStyle = darkColor
-          drawOctagon(3.5)
-
-          ctx.fillStyle = lightColor
-          drawOctagon(2.5)
-
-          ctx.fillStyle = darkColor
+          traceOctagon(3.5)
+          traceOctagon(2.5)
+          ctx.fill('evenodd')
         }
       }
 
@@ -553,17 +742,14 @@ export async function generateQRCode(outCanvas: HTMLCanvasElement, state: QRCode
           ctx.fillStyle = lightColor
           ctx.fillRect(cX - cell * 2.5, cY - cell * 2.5, cell * 5, cell * 5)
 
+          // Draw the ring as a single even-odd path so that no light color
+          // is needed to erase the center (allows transparent background)
           ctx.beginPath()
           ctx.fillStyle = darkColor
           ctx.arc(cX, cY, cell * 2.5, 0, Math.PI * 2)
-          ctx.fill()
-
-          ctx.beginPath()
-          ctx.fillStyle = lightColor
+          ctx.moveTo(cX + cell * 1.5, cY)
           ctx.arc(cX, cY, cell * 1.5, 0, Math.PI * 2)
-          ctx.fill()
-
-          ctx.fillStyle = darkColor
+          ctx.fill('evenodd')
         }
       }
     }
@@ -729,146 +915,6 @@ export async function generateQRCode(outCanvas: HTMLCanvasElement, state: QRCode
     else {
       square()
     }
-  }
-
-  await applyPerspective()
-
-  if (state.effectTiming === 'after')
-    await applyBackground()
-
-  if (state.effect === 'crystalize') {
-    const data = ctx.getImageData(0, 0, width, height)
-    const newData = effects.crystalize(data, state.effectCrystalizeRadius, state.seed)
-    ctx.putImageData(newData, 0, 0)
-  }
-  else if (state.effect === 'liquidify') {
-    const data = ctx.getImageData(0, 0, width, height)
-    const newData1 = state.effectLiquidifyDistortRadius
-      ? effects.crystalize(data, state.effectLiquidifyDistortRadius, state.seed)
-      : data
-    const newData2 = effects.liquidify(
-      newData1,
-      state.effectLiquidifyRadius,
-      state.effectLiquidifyThreshold,
-      state.lightColor,
-      state.darkColor,
-    )
-    ctx.putImageData(newData2, 0, 0)
-  }
-
-  if (state.effectTiming === 'before')
-    await applyBackground()
-
-  // final, copy offscreen canvas to the real one
-  outCanvas.width = width
-  outCanvas.height = height
-  const realCtx = outCanvas.getContext('2d')!
-  realCtx.save()
-  realCtx.fillStyle = invert ? state.darkColor : state.lightColor
-  realCtx.fillRect(0, 0, width, height)
-  realCtx.setTransform(
-    state.transformScale,
-    0,
-    0,
-    state.transformScale,
-    -(state.transformScale - 1) * width / 2,
-    -(state.transformScale - 1) * height / 2,
-  )
-  realCtx.drawImage(canvas, 0, 0, width, height)
-  realCtx.restore()
-
-  async function applyPerspective() {
-    if (state.transformPerspectiveX === 0 && state.transformPerspectiveY === 0)
-      return
-
-    const data = ctx.getImageData(0, 0, width, height)
-    ctx.clearRect(0, 0, width, height)
-    const perspective = new Perspective(ctx as any, data)
-
-    const perspectiveX = state.transformPerspectiveX
-    const perspectiveY = state.transformPerspectiveY
-
-    const pos = {
-      topLeftX: 0,
-      topLeftY: 0,
-      bottomLeftX: 0,
-      bottomLeftY: height,
-      topRightX: width,
-      topRightY: 0,
-      bottomRightX: width,
-      bottomRightY: height,
-    }
-
-    if (perspectiveX !== 0) {
-      const offsetX = Math.abs(width * perspectiveX / 2)
-      const offsetY = Math.abs(height * perspectiveX / 3)
-
-      // perspectiveX
-      pos.topLeftX += offsetX
-      pos.topRightX -= offsetX
-      pos.bottomLeftX += offsetX
-      pos.bottomRightX -= offsetX
-      if (perspectiveX > 0) {
-        pos.topRightY += offsetY
-        pos.bottomRightY -= offsetY
-      }
-      else {
-        pos.topLeftY += offsetY
-        pos.bottomLeftY -= offsetY
-      }
-    }
-
-    // perspectiveY
-    if (perspectiveY !== 0) {
-      const offsetX = Math.abs(width * perspectiveY / 3)
-      const offsetY = Math.abs(height * perspectiveY / 2)
-
-      pos.topLeftY += offsetY
-      pos.topRightY += offsetY
-      pos.bottomLeftY -= offsetY
-      pos.bottomRightY -= offsetY
-      if (perspectiveY > 0) {
-        pos.bottomLeftX += offsetX
-        pos.bottomRightX -= offsetX
-      }
-      else {
-        pos.topLeftX += offsetX
-        pos.topRightX -= offsetX
-      }
-    }
-
-    perspective.draw(pos)
-  }
-
-  async function applyBackground() {
-    ctx.restore()
-    const clone = document.createElement('canvas')
-    clone.width = width
-    clone.height = height
-    clone.getContext('2d')!.putImageData(ctx.getImageData(0, 0, width, height), 0, 0)
-
-    ctx.fillStyle = invert ? state.darkColor : state.lightColor
-    ctx.fillRect(0, 0, width, height)
-    if (state.backgroundImage) {
-      if (state.backgroundImage.startsWith('#')) {
-        ctx.fillStyle = state.backgroundImage
-        ctx.fillRect(0, 0, width, height)
-      }
-      else {
-        const img = new Image()
-        img.src = state.backgroundImage
-        await new Promise(resolve => img.onload = resolve).then()
-        // draw the image full cover the canvas with aspect ratio
-        const imgRatio = img.width / img.height
-        const canvasRatio = width / height
-        if (imgRatio < canvasRatio)
-          ctx.drawImage(img, 0, (height - width / imgRatio) / 2, width, width / imgRatio)
-        else
-          ctx.drawImage(img, (width - height * imgRatio) / 2, 0, height * imgRatio, height)
-      }
-    }
-
-    ctx.drawImage(clone, 0, 0)
   }
 }
 
