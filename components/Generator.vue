@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { debounce } from 'perfect-debounce'
 import { sendParentEvent } from '~/logic/messaging'
-import { generateQRCode } from '~/logic/generate'
+import { generateQRCode, generateQRCodeSVG } from '~/logic/generate'
 import { dataUrlGeneratedQRCode, defaultGeneratorState, generateQRCodeInfo, hasParentWindow, isLargeScreen, qrcode } from '~/logic/state'
 import { view } from '~/logic/view'
 import type { State } from '~/logic/types'
@@ -34,6 +34,20 @@ function download() {
   a.href = dataUrlGeneratedQRCode.value!
   a.download = `${state.value.text.replace(/\W/g, '_')}[${state.value.ecc}_x${state.value.scale}].png`
   a.click()
+}
+
+function downloadSVG() {
+  const svg = generateQRCodeSVG(state.value)
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
+  a.download = `${state.value.text.replace(/\W/g, '_')}[${state.value.ecc}_x${state.value.scale}].svg`
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
+function setCenterIcon(dataurl: string) {
+  state.value.icon = dataurl
+  state.value.ecc = 'H'
 }
 
 function reset() {
@@ -90,6 +104,8 @@ async function readState(e: Event) {
 const debouncedRun = debounce(run, 250, { trailing: true })
 
 const mayNotScannable = computed(() => {
+  if (state.value.icon && state.value.ecc !== 'H')
+    return true
   if ((state.value.marginNoise || state.value.backgroundImage) && state.value.marginNoiseSpace === 'none')
     return true
   if (state.value.effect === 'crystalize' && state.value.effectCrystalizeRadius / state.value.scale > 0.4)
@@ -110,6 +126,14 @@ const mayNotScannable = computed(() => {
     return true
   if (state.value.transformScale > 1.05)
     return true
+})
+
+const svgNotFullySupported = computed(() => {
+  return state.value.effect !== 'none'
+    || state.value.transformPerspectiveX !== 0
+    || state.value.transformPerspectiveY !== 0
+    || state.value.transformScale !== 1
+    || !!state.value.backgroundImage
 })
 
 const hasNonCenteredMargin = computed(() => {
@@ -345,15 +369,48 @@ watch(
           </button>
         </OptionItem>
 
+        <OptionItem title="Center Icon" div description="Embed an icon with a protected quiet area in the center">
+          <button relative text-xs text-button>
+            <img
+              v-if="state.icon" :src="state.icon"
+              z-1 h-5 w-5 rounded object-contain
+            >
+            <div v-else i-ri-image-add-line z-1 />
+            <div z-1>
+              {{ state.icon ? 'Replace' : 'Upload' }}
+            </div>
+            <ImageUpload :model-value="state.icon" @update:model-value="setCenterIcon" />
+          </button>
+          <button v-if="state.icon" icon-button-sm title="Clear icon" @click="state.icon = undefined">
+            <div i-carbon-close />
+          </button>
+        </OptionItem>
+
+        <template v-if="state.icon">
+          <OptionItem title="Icon Size" nested @reset="state.iconSize = 16">
+            <OptionSlider v-model="state.iconSize" :min="8" :max="18" :step="1" unit="%" />
+          </OptionItem>
+          <OptionItem title="Transparent Gap" nested description="Clear a small transparent area between the QR modules and icon" @reset="state.iconPadding = 8">
+            <OptionSlider v-model="state.iconPadding" :min="0" :max="10" :step="1" unit="%" />
+          </OptionItem>
+          <OptionItem title="Rounded Icon" nested @reset="state.iconRounded = true">
+            <OptionCheckbox v-model="state.iconRounded" />
+          </OptionItem>
+        </template>
+
         <div border="t base" my1 />
 
-        <OptionItem title="Colors" div @reset="() => { state.lightColor = '#ffffff'; state.darkColor = '#000000' }">
+        <OptionItem title="Colors" div @reset="() => { state.lightColor = '#ffffff'; state.darkColor = '#000000'; state.transparent = false }">
           <div flex="~ gap-2">
             <OptionColor v-model="state.lightColor" />
             <OptionColor v-model="state.darkColor" />
             <label flex="~ gap-2 items-center" ml2>
               <OptionCheckbox v-model="state.invert" />
               <span text-sm op75>Invert</span>
+            </label>
+            <label flex="~ gap-2 items-center" ml2>
+              <OptionCheckbox v-model="state.transparent" />
+              <span text-sm op75>Transparent</span>
             </label>
           </div>
         </OptionItem>
@@ -461,7 +518,7 @@ watch(
           width: `${rightPanelRect.width}px`,
         } : {}"
       >
-        <canvas ref="canvas" w-full width="1000" height="1000" border="~ base rounded" />
+        <canvas ref="canvas" w-full width="1000" height="1000" border="~ base rounded" :class="state.transparent ? 'bg-transparency-grid' : ''" />
 
         <div v-if="qrcode" border="~ base rounded" p3 pl6 pr0 flex="~ col gap-2">
           <div grid="~ gap-1 cols-6 items-center">
@@ -504,7 +561,14 @@ watch(
           @click="download()"
         >
           <div i-ri-download-line />
-          Download
+          Download PNG
+        </button>
+        <button
+          py2 text-sm text-button
+          @click="downloadSVG()"
+        >
+          <div i-ri-download-line />
+          Download SVG
         </button>
         <button
           py2 text-sm text-button
@@ -533,6 +597,15 @@ watch(
         <div v-if="state.renderPointsType !== 'all'" border="~ indigo/60 rounded" bg-indigo-5:10 px3 py2 text-sm text-indigo>
           This is a partial QR Code. It does <b>not</b> contain all the necessary data to be scannable.
         </div>
+        <div v-if="state.icon && state.ecc !== 'H'" border="~ yellow-6/60 rounded" bg-yellow-5:10 px3 py2 text-sm text-yellow-6>
+          Center icons are safest with <b>H error correction</b>.
+          <button ml1 underline @click="state.ecc = 'H'">
+            Use H
+          </button>
+        </div>
+        <div v-if="svgNotFullySupported" border="~ yellow-6/60 rounded" bg-yellow-5:10 px3 py2 text-sm text-yellow-6>
+          <b>SVG export</b> does not support effects, transforms, or background images. They will be ignored in the exported SVG.
+        </div>
       </div>
 
       <div my8 h-1px border="t base" w-10 lg:hidden />
@@ -560,3 +633,16 @@ watch(
     @update:model-value="uploadQR = undefined"
   />
 </template>
+
+<style scoped>
+.bg-transparency-grid {
+  background-color: #fff;
+  background-image:
+    linear-gradient(45deg, #d1d5db 25%, transparent 25%),
+    linear-gradient(-45deg, #d1d5db 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #d1d5db 75%),
+    linear-gradient(-45deg, transparent 75%, #d1d5db 75%);
+  background-position: 0 0, 0 12px, 12px -12px, -12px 0;
+  background-size: 24px 24px;
+}
+</style>
