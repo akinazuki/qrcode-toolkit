@@ -42,6 +42,7 @@ function downloadSVG() {
   a.href = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
   a.download = `${state.value.text.replace(/\W/g, '_')}[${state.value.ecc}_x${state.value.scale}].svg`
   a.click()
+  URL.revokeObjectURL(a.href)
 }
 
 function reset() {
