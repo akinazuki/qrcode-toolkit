@@ -55,17 +55,40 @@ function getQRCodeDimensions(qr: QrCodeGenerateResult, state: QRCodeGeneratorSta
   }
 }
 
+function getCenterIconLayout(qrSize: number, state: QRCodeGeneratorState) {
+  if (!state.icon?.startsWith('data:image/'))
+    return
+
+  const { top: marginTop, left: marginLeft } = resolveMargin(state.margin)
+  const qrPixelSize = qrSize * state.scale
+  const size = qrPixelSize * Math.min(18, Math.max(8, state.iconSize)) / 100
+  const padding = size * Math.min(10, Math.max(0, state.iconPadding)) / 100
+
+  return {
+    x: marginLeft * state.scale + (qrPixelSize - size) / 2,
+    y: marginTop * state.scale + (qrPixelSize - size) / 2,
+    size,
+    padding,
+    rounded: state.iconRounded,
+  }
+}
+
 export function generateQRCodeSVG(state: QRCodeGeneratorState): string {
   const qr = createQrInstance(state)
   const { width, height } = getQRCodeDimensions(qr, state)
   const ctx = new SvgContext()
   drawQRCode(ctx, state, qr)
+  const icon = getCenterIconLayout(qr.size, state)
   return ctx.toSVG(
     width,
     height,
     state.transparent
       ? undefined
       : (state.invert ? state.darkColor : state.lightColor),
+    icon && {
+      ...icon,
+      href: state.icon!,
+    },
   )
 }
 
@@ -141,6 +164,7 @@ export async function generateQRCode(outCanvas: HTMLCanvasElement, state: QRCode
   )
   realCtx.drawImage(canvas, 0, 0, width, height)
   realCtx.restore()
+  await drawCenterIcon(realCtx, qr.size, state)
 
   async function applyPerspective() {
     if (state.transformPerspectiveX === 0 && state.transformPerspectiveY === 0)
@@ -237,6 +261,62 @@ export async function generateQRCode(outCanvas: HTMLCanvasElement, state: QRCode
 
     ctx.drawImage(clone, 0, 0)
   }
+}
+
+async function drawCenterIcon(ctx: CanvasRenderingContext2D, qrSize: number, state: QRCodeGeneratorState) {
+  const layout = getCenterIconLayout(qrSize, state)
+  if (!layout)
+    return
+
+  const image = await new Promise<HTMLImageElement | undefined>((resolve) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => resolve(undefined)
+    image.src = state.icon!
+  })
+  if (!image)
+    return
+
+  const gapX = layout.x - layout.padding
+  const gapY = layout.y - layout.padding
+  const gapSize = layout.size + layout.padding * 2
+
+  ctx.clearRect(gapX, gapY, gapSize, gapSize)
+
+  ctx.save()
+  if (layout.rounded) {
+    roundedRect(ctx, layout.x, layout.y, layout.size, layout.size, layout.size * 0.14)
+    ctx.clip()
+  }
+
+  const imageWidth = image.naturalWidth || image.width
+  const imageHeight = image.naturalHeight || image.height
+  const imageScale = Math.min(layout.size / imageWidth, layout.size / imageHeight)
+  const drawWidth = imageWidth * imageScale
+  const drawHeight = imageHeight * imageScale
+  ctx.drawImage(
+    image,
+    layout.x + (layout.size - drawWidth) / 2,
+    layout.y + (layout.size - drawHeight) / 2,
+    drawWidth,
+    drawHeight,
+  )
+  ctx.restore()
+}
+
+function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
+  const r = Math.min(radius, width / 2, height / 2)
+  ctx.beginPath()
+  ctx.moveTo(x + r, y)
+  ctx.lineTo(x + width - r, y)
+  ctx.arcTo(x + width, y, x + width, y + r, r)
+  ctx.lineTo(x + width, y + height - r)
+  ctx.arcTo(x + width, y + height, x + width - r, y + height, r)
+  ctx.lineTo(x + r, y + height)
+  ctx.arcTo(x, y + height, x, y + height - r, r)
+  ctx.lineTo(x, y + r)
+  ctx.arcTo(x, y, x + r, y, r)
+  ctx.closePath()
 }
 
 function drawQRCode(ctx: Draw2DContext, state: QRCodeGeneratorState, qr: QrCodeGenerateResult) {

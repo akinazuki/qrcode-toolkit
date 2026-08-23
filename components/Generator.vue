@@ -45,6 +45,11 @@ function downloadSVG() {
   URL.revokeObjectURL(a.href)
 }
 
+function setCenterIcon(dataurl: string) {
+  state.value.icon = dataurl
+  state.value.ecc = 'H'
+}
+
 function reset() {
   // eslint-disable-next-line no-alert
   if (confirm('Are you sure to reset all state?'))
@@ -99,6 +104,8 @@ async function readState(e: Event) {
 const debouncedRun = debounce(run, 250, { trailing: true })
 
 const mayNotScannable = computed(() => {
+  if (state.value.icon && state.value.ecc !== 'H')
+    return true
   if ((state.value.marginNoise || state.value.backgroundImage) && state.value.marginNoiseSpace === 'none')
     return true
   if (state.value.effect === 'crystalize' && state.value.effectCrystalizeRadius / state.value.scale > 0.4)
@@ -362,6 +369,35 @@ watch(
           </button>
         </OptionItem>
 
+        <OptionItem title="Center Icon" div description="Embed an icon with a protected quiet area in the center">
+          <button relative text-xs text-button>
+            <img
+              v-if="state.icon" :src="state.icon"
+              z-1 h-5 w-5 rounded object-contain
+            >
+            <div v-else i-ri-image-add-line z-1 />
+            <div z-1>
+              {{ state.icon ? 'Replace' : 'Upload' }}
+            </div>
+            <ImageUpload :model-value="state.icon" @update:model-value="setCenterIcon" />
+          </button>
+          <button v-if="state.icon" icon-button-sm title="Clear icon" @click="state.icon = undefined">
+            <div i-carbon-close />
+          </button>
+        </OptionItem>
+
+        <template v-if="state.icon">
+          <OptionItem title="Icon Size" nested @reset="state.iconSize = 16">
+            <OptionSlider v-model="state.iconSize" :min="8" :max="18" :step="1" unit="%" />
+          </OptionItem>
+          <OptionItem title="Transparent Gap" nested description="Clear a small transparent area between the QR modules and icon" @reset="state.iconPadding = 8">
+            <OptionSlider v-model="state.iconPadding" :min="0" :max="10" :step="1" unit="%" />
+          </OptionItem>
+          <OptionItem title="Rounded Icon" nested @reset="state.iconRounded = true">
+            <OptionCheckbox v-model="state.iconRounded" />
+          </OptionItem>
+        </template>
+
         <div border="t base" my1 />
 
         <OptionItem title="Colors" div @reset="() => { state.lightColor = '#ffffff'; state.darkColor = '#000000'; state.transparent = false }">
@@ -561,6 +597,12 @@ watch(
         <div v-if="state.renderPointsType !== 'all'" border="~ indigo/60 rounded" bg-indigo-5:10 px3 py2 text-sm text-indigo>
           This is a partial QR Code. It does <b>not</b> contain all the necessary data to be scannable.
         </div>
+        <div v-if="state.icon && state.ecc !== 'H'" border="~ yellow-6/60 rounded" bg-yellow-5:10 px3 py2 text-sm text-yellow-6>
+          Center icons are safest with <b>H error correction</b>.
+          <button ml1 underline @click="state.ecc = 'H'">
+            Use H
+          </button>
+        </div>
         <div v-if="svgNotFullySupported" border="~ yellow-6/60 rounded" bg-yellow-5:10 px3 py2 text-sm text-yellow-6>
           <b>SVG export</b> does not support effects, transforms, or background images. They will be ignored in the exported SVG.
         </div>
@@ -594,6 +636,13 @@ watch(
 
 <style scoped>
 .bg-transparency-grid {
-  background: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAABGdBTUEAALGPC/xhBQAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAIKADAAQAAAABAAAAIAAAAACPTkDJAAAAZUlEQVRIDe2VMQoAMAgDa9/g/1/oIzrpZBCh2dLFkkoDF0Fz99OdiOjks+2/7S8fRRmMMIVoRGSoYzvvqF8ZIMKlC1GhQBc6IkPzq32QmdAzkEGihpWOSPsAss8HegYySNSw0hE9WQ4StafZFqkAAAAASUVORK5CYII=) 0% 0% / 30px;
+  background-color: #fff;
+  background-image:
+    linear-gradient(45deg, #d1d5db 25%, transparent 25%),
+    linear-gradient(-45deg, #d1d5db 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #d1d5db 75%),
+    linear-gradient(-45deg, transparent 75%, #d1d5db 75%);
+  background-position: 0 0, 0 12px, 12px -12px, -12px 0;
+  background-size: 24px 24px;
 }
 </style>

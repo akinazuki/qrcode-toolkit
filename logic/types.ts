@@ -100,6 +100,10 @@ export interface QRCodeGeneratorState extends QrCodeGeneratorMarkerState {
   lightColor: string
   darkColor: string
   transparent: boolean
+  icon?: string
+  iconSize: number
+  iconPadding: number
+  iconRounded: boolean
   maskPattern: number
   boostECC: boolean
   minVersion: number

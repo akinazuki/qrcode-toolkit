@@ -5,8 +5,25 @@ interface SvgShape {
   rect?: [number, number, number, number]
 }
 
+export interface SvgImageOverlay {
+  href: string
+  x: number
+  y: number
+  size: number
+  padding: number
+  rounded: boolean
+}
+
 function f(n: number) {
   return Math.round(n * 100) / 100
+}
+
+function escapeAttribute(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
 }
 
 /**
@@ -137,10 +154,10 @@ export class SvgContext {
     })
   }
 
-  toSVG(width: number, height: number, background?: string): string {
+  toSVG(width: number, height: number, background?: string, overlay?: SvgImageOverlay): string {
     const body: string[] = []
     if (background)
-      body.push(`<rect width="${f(width)}" height="${f(height)}" fill="${background}"/>`)
+      body.push(`<rect width="${f(width)}" height="${f(height)}" fill="${escapeAttribute(background)}"/>`)
 
     for (const shape of this.shapes) {
       const { fill } = shape
@@ -152,14 +169,34 @@ export class SvgContext {
         continue
       if (shape.rect) {
         const [x, y, w, h] = shape.rect
-        body.push(`<rect x="${f(x)}" y="${f(y)}" width="${f(w)}" height="${f(h)}" fill="${fill}"/>`)
+        body.push(`<rect x="${f(x)}" y="${f(y)}" width="${f(w)}" height="${f(h)}" fill="${escapeAttribute(fill)}"/>`)
       }
       else if (shape.d) {
         const rule = shape.rule === 'evenodd' ? ' fill-rule="evenodd"' : ''
-        body.push(`<path d="${shape.d}" fill="${fill}"${rule}/>`)
+        body.push(`<path d="${shape.d}" fill="${escapeAttribute(fill)}"${rule}/>`)
       }
     }
 
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="${f(width)}" height="${f(height)}" viewBox="0 0 ${f(width)} ${f(height)}">${body.join('')}</svg>`
+    let content = body.join('')
+
+    if (overlay) {
+      const gapX = overlay.x - overlay.padding
+      const gapY = overlay.y - overlay.padding
+      const gapSize = overlay.size + overlay.padding * 2
+      const iconRadius = overlay.rounded ? overlay.size * 0.14 : 0
+      const clipId = 'qr-center-icon-clip'
+      const gapMaskId = 'qr-center-icon-gap'
+      const definitions = [
+        `<mask id="${gapMaskId}" maskUnits="userSpaceOnUse"><rect width="${f(width)}" height="${f(height)}" fill="#fff"/><rect x="${f(gapX)}" y="${f(gapY)}" width="${f(gapSize)}" height="${f(gapSize)}" fill="#000"/></mask>`,
+      ]
+
+      if (overlay.rounded)
+        definitions.push(`<clipPath id="${clipId}"><rect x="${f(overlay.x)}" y="${f(overlay.y)}" width="${f(overlay.size)}" height="${f(overlay.size)}" rx="${f(iconRadius)}"/></clipPath>`)
+
+      const clip = overlay.rounded ? ` clip-path="url(#${clipId})"` : ''
+      content = `<defs>${definitions.join('')}</defs><g mask="url(#${gapMaskId})">${content}</g><image href="${escapeAttribute(overlay.href)}" x="${f(overlay.x)}" y="${f(overlay.y)}" width="${f(overlay.size)}" height="${f(overlay.size)}" preserveAspectRatio="xMidYMid meet"${clip}/>`
+    }
+
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${f(width)}" height="${f(height)}" viewBox="0 0 ${f(width)} ${f(height)}">${content}</svg>`
   }
 }
